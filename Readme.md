@@ -16,7 +16,7 @@ This is perfect for:
 - Uses a local container registry
 - Avoids Docker Hub rate limits using Amazon ECR Public
 - Builds and deploys the AMD ROCm device plugin (locally)
-- Deploys NVIDIA plugin (pulled from ECR Public)
+- Builds and deploys NVIDIA plugin (locally)
 - Includes GPU test pod manifests
 
 ## Quick Start
