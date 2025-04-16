@@ -51,7 +51,9 @@ kubectl apply -f nvidia-gpu-test-pod.yaml
 
 #### For AMD:
 
-Update the manifest to use `amd.com/gpu` and apply similarly.
+```bash
+kubectl apply -f rocm-gpu-test-pod.yaml
+```
 
 ### 4. Tear down the cluster
 
