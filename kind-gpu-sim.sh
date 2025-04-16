@@ -54,6 +54,7 @@ function build_and_push_images() {
     fi
     cd k8s-device-plugin-nvidia
     docker build \
+      --build-arg GOLANG_VERSION=1.21.6 \
       -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
       -f deployments/container/Dockerfile \
       .
