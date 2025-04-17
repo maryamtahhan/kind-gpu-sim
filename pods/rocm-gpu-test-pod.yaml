@@ -6,7 +6,7 @@ spec:
   containers:
     - name: gpu-sim
       image: public.ecr.aws/docker/library/busybox:latest
-      command: [sh, -c, "echo Hello from fake GPU node && sleep 3600"]  # yamllint disable-line rule:quoted-strings
+      command: [sh, -c, "echo Hello from fake ROCm GPU node && sleep 3600"]  # yamllint disable-line rule:quoted-strings
       resources:
         limits:
           amd.com/gpu: 1
