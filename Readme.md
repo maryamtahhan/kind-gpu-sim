@@ -21,7 +21,8 @@ This is perfect for:
 
 ## Prerequisites
 
-Make sure the following tools are installed on your system before running the GPU simulator script:
+Make sure the following tools are installed on your system before running
+the GPU simulator script:
 
 <!-- markdownlint-disable  MD013 -->
 <!-- Teporarily disable MD013 - Line length to keep the table formatting  -->
