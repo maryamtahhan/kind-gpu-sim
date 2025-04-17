@@ -1,11 +1,11 @@
 name: NVIDIA GPU Sim Cluster CI
 
-on:
+on: # yamllint disable-line rule:truthy
   push:
     paths:
-      - 'kind-gpu-sim.sh'
-      - 'pods/nvidia-gpu-test-pod.yaml'
-      - '.github/workflows/kind-gpu.yml'
+      - kind-gpu-sim.sh
+      - pods/nvidia-gpu-test-pod.yaml
+      - .github/workflows/kind-gpu.yml
 
 jobs:
   gpu-sim-test:
