@@ -1,7 +1,7 @@
 
 # kind-gpu-sim
 
-Simulate **NVIDIA** or **AMD (ROCm)** GPUs in a local
+Simulate **NVIDIA** or **AMD (ROCm)** GPUs in a
 [Kubernetes in Docker (kind)](https://kind.sigs.k8s.io/)
 cluster, without requiring actual GPU hardware.
 
