@@ -141,10 +141,10 @@ spec:
         name: nvidia-device-plugin
     spec:
       tolerations:
-      - key: "gpu"
-        operator: "Equal"
+      - key: gpu
+        operator: Equal
         value: "true"
-        effect: "NoSchedule"
+        effect: NoSchedule
       containers:
       - name: nvidia-device-plugin-ctr
         image: localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
@@ -153,6 +153,14 @@ spec:
         env:
         - name: FAIL_ON_INIT_ERROR
           value: "false"
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: DirectoryOrCreate
 EOF
 }
 
