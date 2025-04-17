@@ -9,7 +9,14 @@ This is perfect for:
 
 - Testing GPU scheduling
 - Validating device plugin behavior
-- Learning how GPU workloads are handled by Kubernetes
+- Learning how GPU workloads interact with Kubernetes
+- Building GPU-related Kubernetes infrastructure
+  (where no real workloads are required).
+
+## ⚠️ Important: No Real GPU Support
+
+> This project **simulates** the presence of GPU resources in a Kind cluster.
+> It **does not provide access to actual GPU hardware**, and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
 
 ## Features
 
@@ -20,11 +27,6 @@ This is perfect for:
 - Builds and deploys the AMD ROCm device plugin (locally)
 - Builds and deploys NVIDIA plugin (locally)
 - Includes GPU test pod manifests
-
-## ⚠️ Important: No Real GPU Support
-
-> This project **simulates** the presence of GPU resources in a Kind cluster.
-> It **does not provide access to actual GPU hardware**, and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
 
 ## Quick Start
 
