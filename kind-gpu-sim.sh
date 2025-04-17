@@ -64,7 +64,7 @@ function build_and_push_images() {
   fi
 
   echo " Building ROCm plugin images locally..."
-  if [ ! -d k8s-device-plugin ]; then
+  if [ ! -d k8s-device-plugin-rocm ]; then
     git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git k8s-device-plugin-rocm
   fi
   cd k8s-device-plugin-rocm
