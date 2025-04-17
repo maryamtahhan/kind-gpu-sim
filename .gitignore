@@ -1,29 +1,9 @@
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Docker files
-*.tar
-*.img
-*.log
-
 # Kind / Kubernetes state
 *.kubeconfig
 kind-gpu-config.yaml.backup
-k8s-device-plugin/
+k8s-device-plugin-rocm/
 k8s-device-plugin-nvidia/
-
-# Python virtualenv
-.venv/
-env/
-venv/
-
-# Local cache / logs
-.cache/
-*.log
-*.out
 
 # IDE/editor files
 .vscode/
@@ -39,10 +19,6 @@ Thumbs.db
 *.bin
 *.o
 *.so
-
-# Test artifacts
-*.test.yaml
-*.generated.yaml
 
 # Local registry volumes or images
 registry/
