@@ -4,22 +4,22 @@ metadata:
   name: triton-gpu-test
 spec:
   containers:
-  - name: triton-test
-    image: registry.access.redhat.com/ubi9/python-312
-    command: ["sh", "-c"]
-    args:
-      - |
-        pip install triton
-        echo " Running Triton version check..."
-        python -c 'import triton; print("Triton version:", triton.__version__)'
-        sleep 3600
-    resources:
-      limits:
-        nvidia.com/gpu: 1
+    - name: triton-test
+      image: registry.access.redhat.com/ubi9/python-312
+      command: [sh, -c]
+      args:
+        - |
+          pip install triton
+          echo "Running Triton version check..."
+          python -c 'import triton; print("Triton version:", triton.__version__)'
+          sleep 3600
+      resources:
+        limits:
+          nvidia.com/gpu: 1
   nodeSelector:
     hardware-type: gpu
   tolerations:
-    - key: "gpu"
-      operator: "Equal"
-      value: "true"
-      effect: "NoSchedule"
+    - key: gpu
+      operator: Equal
+      value: true
+      effect: NoSchedule

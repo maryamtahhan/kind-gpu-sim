@@ -4,16 +4,16 @@ metadata:
   name: nvidia-gpu-test
 spec:
   containers:
-  - name: gpu-sim
-    image: public.ecr.aws/docker/library/busybox:latest
-    command: ["sh", "-c", "echo Hello from fake NVIDIA GPU node && sleep 3600"]
-    resources:
-      limits:
-        nvidia.com/gpu: 1
+    - name: gpu-sim
+      image: public.ecr.aws/docker/library/busybox:latest
+      command: [sh, -c, "echo Hello from fake NVIDIA GPU node && sleep 3600"] # yamllint disable-line rule:quoted-strings
+      resources:
+        limits:
+          nvidia.com/gpu: 1
   nodeSelector:
     hardware-type: gpu
   tolerations:
-  - key: "gpu"
-    operator: "Equal"
-    value: "true"
-    effect: "NoSchedule"
+    - key: gpu
+      operator: Equal
+      value: true
+      effect: NoSchedule

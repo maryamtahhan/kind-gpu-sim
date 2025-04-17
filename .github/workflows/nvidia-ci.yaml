@@ -1,0 +1,38 @@
+name: NVIDIA GPU Sim Cluster CI
+
+on:
+  push:
+    paths:
+      - 'kind-gpu-sim.sh'
+      - 'pods/nvidia-gpu-test-pod.yaml'
+      - '.github/workflows/kind-gpu.yml'
+
+jobs:
+  gpu-sim-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Install KinD + kubectl
+      run: |
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64
+        chmod +x ./kind
+        sudo mv ./kind /usr/local/bin/kind
+
+        curl -LO "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl"
+        chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
+
+    - name: Create Kind GPU cluster
+      run: |
+        ./your-cluster-script.sh create nvidia
+
+    - name: Deploy test pod
+      run: |
+        kubectl create -f pods/nvidia-gpu-test-pod.yaml
+        kubectl wait --for=condition=Ready pod/nvidia-gpu-test --timeout=60s
+
+    - name: Check pod logs
+      run: |
+        kubectl logs pod/nvidia-gpu-test
