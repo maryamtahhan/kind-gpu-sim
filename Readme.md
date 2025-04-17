@@ -17,10 +17,14 @@ This is perfect for:
 - Simulated `amd.com/gpu` or `nvidia.com/gpu` resources
 - Automatically taints and labels GPU nodes
 - Uses a local container registry
-- Avoids Docker Hub rate limits using Amazon ECR Public
 - Builds and deploys the AMD ROCm device plugin (locally)
 - Builds and deploys NVIDIA plugin (locally)
 - Includes GPU test pod manifests
+
+## ⚠️ Important: No Real GPU Support
+
+> This project **simulates** the presence of GPU resources in a Kind cluster.
+> It **does not provide access to actual GPU hardware**, and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
 
 ## Quick Start
 
