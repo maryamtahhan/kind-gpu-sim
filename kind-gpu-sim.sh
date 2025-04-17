@@ -97,28 +97,37 @@ kind: DaemonSet
 metadata:
   name: amdgpu-device-plugin-daemonset
   namespace: kube-system
-  labels:
-    name: amdgpu-dp-ds
 spec:
   selector:
     matchLabels:
-      name: amdgpu-dp-ds
+      app: amdgpu-device-plugin
   template:
     metadata:
       labels:
-        name: amdgpu-dp-ds
+        app: amdgpu-device-plugin
     spec:
+      nodeSelector:
+        hardware-type: gpu
       tolerations:
-      - key: "gpu"
-        operator: "Equal"
-        value: "true"
-        effect: "NoSchedule"
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       containers:
-      - name: amdgpu-dp-ds
-        image: localhost:${REGISTRY_PORT}/amdgpu-dp:dev
-        securityContext:
-          privileged: true
+        - name: amdgpu-dp-ds
+          image: localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+          securityContext:
+            privileged: true
 EOF
+
+  echo " Giving the DaemonSet a few seconds to initialize..."
+  sleep 5
+
+  echo " Waiting for ROCm device plugin pods to become Ready..."
+  if ! kubectl wait --for=condition=Ready -n kube-system pod -l app=amdgpu-device-plugin --timeout=60s; then
+    echo >&2 " ERROR: ROCm device plugin pods did not become Ready in time. Exiting."
+    exit 1
+  fi
 }
 
 function deploy_nvidia_plugin() {
@@ -129,39 +138,48 @@ kind: DaemonSet
 metadata:
   name: nvidia-device-plugin-daemonset
   namespace: kube-system
-  labels:
-    name: nvidia-device-plugin
 spec:
   selector:
     matchLabels:
-      name: nvidia-device-plugin
+      app: nvidia-device-plugin
   template:
     metadata:
       labels:
-        name: nvidia-device-plugin
+        app: nvidia-device-plugin
     spec:
+      nodeSelector:
+        hardware-type: gpu
       tolerations:
-      - key: gpu
-        operator: Equal
-        value: "true"
-        effect: NoSchedule
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       containers:
-      - name: nvidia-device-plugin-ctr
-        image: localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
-        securityContext:
-          privileged: true
-        env:
-        - name: FAIL_ON_INIT_ERROR
-          value: "false"
-        volumeMounts:
-        - name: device-plugin
-          mountPath: /var/lib/kubelet/device-plugins
+        - name: nvidia-device-plugin-ctr
+          image: localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+          securityContext:
+            privileged: true
+          env:
+            - name: FAIL_ON_INIT_ERROR
+              value: "false"
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
       volumes:
-      - name: device-plugin
-        hostPath:
-          path: /var/lib/kubelet/device-plugins
-          type: DirectoryOrCreate
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+            type: DirectoryOrCreate
 EOF
+
+  echo " Giving the DaemonSet a few seconds to initialize..."
+  sleep 5
+
+  echo " Waiting for NVIDIA device plugin pods to become Ready..."
+  if ! kubectl wait --for=condition=Ready -n kube-system pod -l app=nvidia-device-plugin --timeout=60s; then
+    echo >&2 " ERROR: NVIDIA device plugin pods did not become Ready in time. Exiting."
+    exit 1
+  fi
 }
 
 function delete_cluster() {

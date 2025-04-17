@@ -74,10 +74,24 @@ Create a pod that requests GPU resources:
 kubectl create -f pods/nvidia-gpu-test-pod.yaml
 ```
 
+Check pod logs
+
+```bash
+kubectl logs nvidia-gpu-test
+Hello from fake NVIDIA GPU node
+```
+
 #### For AMD
 
 ```bash
 kubectl create -f pods/rocm-gpu-test-pod.yaml
+```
+
+Check pod logs
+
+```bash
+kubectl logs gpu-rocm-test
+Hello from fake ROCm GPU node
 ```
 
 ### 4. Tear down the cluster
