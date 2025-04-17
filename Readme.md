@@ -1,9 +1,12 @@
 
 # kind-gpu-sim
 
-Simulate **NVIDIA** or **AMD (ROCm)** GPUs in a local [Kubernetes in Docker (kind)](https://kind.sigs.k8s.io/) cluster, without requiring actual GPU hardware.
+Simulate **NVIDIA** or **AMD (ROCm)** GPUs in a local
+[Kubernetes in Docker (kind)](https://kind.sigs.k8s.io/)
+cluster, without requiring actual GPU hardware.
 
 This is perfect for:
+
 - Testing GPU scheduling
 - Validating device plugin behavior
 - Learning how GPU workloads are handled by Kubernetes
@@ -21,7 +24,7 @@ This is perfect for:
 
 ## Quick Start
 
-### 1. Clone the repo and make the script executable:
+### 1. Clone the repo and make the script executable
 
 ```bash
 chmod +x kind-gpu-sim.sh
@@ -43,13 +46,13 @@ Choose your simulation type:
 
 Create a pod that requests GPU resources:
 
-#### For NVIDIA:
+#### For NVIDIA
 
 ```bash
 kubectl create -f pods/nvidia-gpu-test-pod.yaml
 ```
 
-#### For AMD:
+#### For AMD
 
 ```bash
 kubectl create -f pods/rocm-gpu-test-pod.yaml
@@ -61,7 +64,7 @@ kubectl create -f pods/rocm-gpu-test-pod.yaml
 ./kind-gpu-sim.sh delete
 ```
 
-##  File Structure
+## File Structure
 
 ```bash
 .
@@ -74,7 +77,7 @@ kubectl create -f pods/rocm-gpu-test-pod.yaml
 └── Readme.md                     # Project overview and usage instructions
 ```
 
-##  How It Works
+## How It Works
 
 | Component            | Description                                           |
 |----------------------|-------------------------------------------------------|
@@ -90,6 +93,7 @@ kubectl create -f pods/rocm-gpu-test-pod.yaml
 ## Why Simulate?
 
 This project helps:
+
 - Devs test GPU workloads without expensive hardware
 - CI environments validate GPU scheduling logic
 - Anyone learn Kubernetes GPU primitives
