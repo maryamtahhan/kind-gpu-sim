@@ -15,13 +15,16 @@ This is perfect for:
 
 ## ⚠️ Important: No Real GPU Support
 
-> This project **simulates** the presence of GPU resources in a Kind cluster.
-> It **does not provide access to actual GPU hardware**, and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
+> This project **simulates** the presence of GPU resources in a Kind
+> cluster. It **does not provide access to actual GPU hardware**,
+> and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
 
 ## Prerequisites
 
 Make sure the following tools are installed on your system before running the GPU simulator script:
 
+<!-- markdownlint-disable  MD013 -->
+<!-- Teporarily disable MD013 - Line length to keep the table formatting  -->
 | Tool         | Purpose                                                              |
 |--------------|----------------------------------------------------------------------|
 | **docker**   | Required by `kind`, runs the local registry and all cluster nodes    |
@@ -29,6 +32,7 @@ Make sure the following tools are installed on your system before running the GP
 | **kubectl**  | CLI to interact with the Kubernetes cluster                          |
 | **git**      | Clones the GPU device plugin repositories (NVIDIA / ROCm)            |
 | **sed**      | Used to patch Dockerfiles for public registry compatibility          |
+<!-- markdownlint-enable  MD013 -->
 
 ## Features
 
