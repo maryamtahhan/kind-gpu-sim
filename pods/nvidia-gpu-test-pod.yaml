@@ -15,5 +15,5 @@ spec:
   tolerations:
     - key: gpu
       operator: Equal
-      value: true
+      value: "true"
       effect: NoSchedule
