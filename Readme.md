@@ -18,6 +18,18 @@ This is perfect for:
 > This project **simulates** the presence of GPU resources in a Kind cluster.
 > It **does not provide access to actual GPU hardware**, and **real GPU workloads (like CUDA or ROCm kernels)** will **not run**.
 
+## Prerequisites
+
+Make sure the following tools are installed on your system before running the GPU simulator script:
+
+| Tool         | Purpose                                                              |
+|--------------|----------------------------------------------------------------------|
+| **docker**   | Required by `kind`, runs the local registry and all cluster nodes    |
+| **kind**     | Creates the local Kubernetes cluster inside Docker                   |
+| **kubectl**  | CLI to interact with the Kubernetes cluster                          |
+| **git**      | Clones the GPU device plugin repositories (NVIDIA / ROCm)            |
+| **sed**      | Used to patch Dockerfiles for public registry compatibility          |
+
 ## Features
 
 - Kind cluster with 1 control-plane + 2 workers
