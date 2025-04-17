@@ -41,18 +41,18 @@ Choose your simulation type:
 
 ### 3. (Optional) Test a simulated GPU pod
 
-Apply a pod that requests GPU resources:
+Create a pod that requests GPU resources:
 
 #### For NVIDIA:
 
 ```bash
-kubectl apply -f nvidia-gpu-test-pod.yaml
+kubectl create -f pods/nvidia-gpu-test-pod.yaml
 ```
 
 #### For AMD:
 
 ```bash
-kubectl apply -f rocm-gpu-test-pod.yaml
+kubectl create -f pods/rocm-gpu-test-pod.yaml
 ```
 
 ### 4. Tear down the cluster
@@ -65,12 +65,13 @@ kubectl apply -f rocm-gpu-test-pod.yaml
 
 ```bash
 .
-├── ./kind-gpu-config.yaml         # Kind cluster config: 1 control-plane, 2 workers
-├── ./kind-gpu-sim.sh              # Main script to create/delete simulated GPU clusters (ROCm or NVIDIA)
-├── ./nvidia-gpu-test-pod.yaml     # Pod spec to test NVIDIA GPU simulation (uses nvidia.com/gpu)
-├── ./Readme.md                    # Project overview and usage instructions
-├── ./rocm-gpu-test-pod.yaml       # Pod spec to test AMD ROCm GPU simulation (uses amd.com/gpu)
-└── ./triton-pod.yaml              # Pod that installs and runs Triton-lang, useful for simulating kernel compilation
+├── kind-gpu-config.yaml          # Kind cluster config: 1 control-plane, 2 workers
+├── kind-gpu-sim.sh               # Main script to create/delete simulated GPU clusters (ROCm or NVIDIA)
+├── pods
+│   ├── nvidia-gpu-test-pod.yaml  # Pod spec to test NVIDIA GPU simulation (uses nvidia.com/gpu)
+│   ├── rocm-gpu-test-pod.yaml    # Pod spec to test AMD ROCm GPU simulation (uses amd.com/gpu)
+│   └── triton-pod.yaml           # Pod that installs and runs Triton-lang, useful for simulating kernel compilation
+└── Readme.md                     # Project overview and usage instructions
 ```
 
 ##  How It Works
@@ -84,9 +85,7 @@ kubectl apply -f rocm-gpu-test-pod.yaml
 
 ## Tested With
 
-- kind v0.22+
-- Kubernetes v1.30+
-- Docker with Amazon ECR Public access
+- kind v0.23.0
 
 ## Why Simulate?
 
@@ -94,4 +93,3 @@ This project helps:
 - Devs test GPU workloads without expensive hardware
 - CI environments validate GPU scheduling logic
 - Anyone learn Kubernetes GPU primitives
-

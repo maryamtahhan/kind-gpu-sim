@@ -65,9 +65,9 @@ function build_and_push_images() {
 
   echo " Building ROCm plugin images locally..."
   if [ ! -d k8s-device-plugin ]; then
-    git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git
+    git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git k8s-device-plugin-rocm
   fi
-  cd k8s-device-plugin
+  cd k8s-device-plugin-rocm
   echo " Patching Dockerfile to use Amazon ECR Public mirrors..."
   sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
   sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
