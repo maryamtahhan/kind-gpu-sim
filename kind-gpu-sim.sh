@@ -17,11 +17,9 @@ CLUSTER_NAME=kind-gpu-sim
 CONFIG_FILE=kind-gpu-config.yaml
 REGISTRY_NAME="kind-registry"
 
-# Function to start the local Docker registry
 function start_local_registry() {
   echo "Starting local Docker registry on port ${REGISTRY_PORT}..."
 
-  # Check if the registry container is running, and start it if not
   running=$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
   if [ "$running" != "true" ]; then
     docker run -d --restart=always -p "${REGISTRY_PORT}:5000" \
@@ -33,7 +31,6 @@ function start_local_registry() {
   echo "Ensuring the registry is connected to the Kind network..."
   docker network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
 }
-
 
 function generate_kind_config() {
   if [ -f "${CONFIG_FILE}" ]; then
@@ -56,8 +53,6 @@ nodes:
 EOF
 }
 
-
-# Create the kind cluster with the generated config
 function create_kind_cluster() {
   gpu_type="$1"
   generate_kind_config
@@ -103,7 +98,6 @@ EOF
     docker exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
   done
 }
-
 
 function apply_local_registry_configmap() {
   echo "Applying local registry ConfigMap for Kubernetes..."
