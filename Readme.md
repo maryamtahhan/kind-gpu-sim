@@ -134,3 +134,76 @@ This project helps:
 - Devs test GPU workloads without expensive hardware
 - CI environments validate GPU scheduling logic
 - Anyone learn Kubernetes GPU primitives
+
+---
+
+## RamaLama Integration (Optional AI Model Deployment)
+
+This project supports optional integration with
+[**RamaLama**](https://ramalama.ai), a tool for containerizing
+and serving AI models (e.g., LLaMA, Mistral, TinyLLaMA) using
+OCI-compatible containers.
+
+You can use this setup to **deploy CPU-friendly models** (like
+GGUF-based LLaMA models using `llama.cpp`) inside the simulated
+Kind cluster — even without real GPUs.
+
+### What This Enables
+
+- Run real LLMs in the cluster (via RamaLama containers)
+- Test scheduling, scaling, and lifecycle of AI model deployments
+- Use Kind to simulate GPU infra, while actually running on CPU
+
+### How to Deploy a Model with RamaLama
+
+```bash
+./kind-gpu-sim.sh create rocm --ramalama-model=TheBloke/TinyLlama-1.1B-Chat-v1-0-GGUF
+```
+
+This will:
+
+- Pull the model from Hugging Face
+- Convert it to a container image with `llama.cpp`
+- Load the image into Kind nodes
+- Generate and apply Kubernetes YAML
+- Deploy the model (ready for port-forwarding or testing)
+
+### Redeploying a Model Without Recreating the Cluster
+
+```bash
+./kind-gpu-sim.sh ramalama-redeploy-model TheBloke/TinyLlama-1.1B-Chat-v1-0-GGUF
+```
+
+This will:
+
+- Remove the previous model deployment
+- Re-convert and re-apply it cleanly
+
+### Clean Up a Model
+
+```bash
+./kind-gpu-sim.sh ramalama-redeploy-model TheBloke/TinyLlama-1.1B-Chat-v1-0-GGUF
+```
+
+Or manually:
+
+```bash
+kubectl delete deployment tinyllama-1-1b-chat-v1-0-gguf
+kubectl delete service tinyllama-1-1b-chat-v1-0-gguf
+```
+
+### Interact With a Deployed Model
+
+Once the model is deployed, you can port-forward the service and make API requests:
+
+```bash
+kubectl port-forward svc/tinyllama-1-1b-chat-v1-0-gguf 8080:80
+curl -X POST http://localhost:8080/completion \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is the capital of France?", "n_predict": 32}'
+```
+
+### Notes
+
+- Only **CPU-backed runtimes** (e.g., `llama.cpp`) will run successfully inside Kind.
+- GPU-only runtimes (like `vLLM`) will **not** work — there's no actual GPU hardware.

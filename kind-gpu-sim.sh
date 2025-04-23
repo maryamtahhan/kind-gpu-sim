@@ -251,6 +251,136 @@ EOF
   fi
 }
 
+function ramalama_deploy_model() {
+  MODEL_NAME="$1"
+  IMAGE_TAG="$(basename "$MODEL_NAME" | tr '[:upper:]' '[:lower:]' | tr ':' '-' | tr '/' '-')"
+  CONTAINER_NAME="$(echo "${IMAGE_TAG}" | tr '.' '-' | tr '[:upper:]' '[:lower:]')"
+  IMAGE_NAME="localhost:${REGISTRY_PORT}/${IMAGE_TAG}:dev"
+
+  echo " Removing stale image if it exists..."
+  docker rmi -f "$IMAGE_NAME" 2>/dev/null || true
+
+  echo " Converting Hugging Face model '${MODEL_NAME}' to OCI image..."
+  if ! ramalama convert "huggingface://${MODEL_NAME}" "oci://${IMAGE_NAME}" 2>&1 | tee convert.log | grep -q "unauthorized"; then
+    echo " Model converted successfully: ${IMAGE_NAME}"
+  else
+    echo " Conversion failed. Aborting."
+    exit 1
+  fi
+
+  echo " Retagging and pushing image to local registry..."
+  IMAGE_ID=$(docker images --format "{{.Repository}} {{.Tag}} {{.ID}}" | grep "<none>" | awk '{print $3}' | head -n1)
+  if [ -z "$IMAGE_ID" ]; then
+    echo " ERROR: No untagged image found to tag and push. Aborting."
+    docker images | grep tinyllama || true
+    exit 1
+  fi
+
+  docker tag "$IMAGE_ID" "$IMAGE_NAME"
+  docker push "$IMAGE_NAME"
+
+  echo " Pulling image back into Docker (for verification)..."
+  docker pull "$IMAGE_NAME"
+
+  echo " Loading image into Kind cluster nodes..."
+  kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"
+
+  echo " Ensuring RamaLama runtime image is local..."
+  RUNTIME_IMAGE_REMOTE="quay.io/ramalama/ramalama:0.7"
+  RUNTIME_IMAGE_LOCAL="localhost:${REGISTRY_PORT}/ramalama:0.7"
+
+  docker pull "$RUNTIME_IMAGE_REMOTE"
+  docker tag "$RUNTIME_IMAGE_REMOTE" "$RUNTIME_IMAGE_LOCAL"
+  docker push "$RUNTIME_IMAGE_LOCAL"
+  kind load docker-image "$RUNTIME_IMAGE_LOCAL" --name "$CLUSTER_NAME"
+
+  echo " Generating Kubernetes manifest..."
+  ramalama serve \
+    --name "${CONTAINER_NAME}" \
+    --generate=kube \
+    "oci://${IMAGE_NAME}"
+
+  YAML_NAME=$(ls *.yaml | grep "${CONTAINER_NAME}" | head -n1)
+  echo " Fixing generated YAML: ${YAML_NAME}"
+
+  sed -i 's/apiVersion: v1/apiVersion: apps\/v1/' "$YAML_NAME"
+  sed -i '/volumes:/,/type: DirectoryOrCreate/ d' "$YAML_NAME"
+  sed -i 's/subPath: \/models/subPath: models/' "$YAML_NAME"
+  sed -i "0,/name: .*/s/name: .*/name: ${CONTAINER_NAME}/" "$YAML_NAME"
+  sed -i "0,/app: .*/s/app: .*/app: ${CONTAINER_NAME}/" "$YAML_NAME"
+  sed -i "s|quay.io/ramalama/ramalama:0.7|${RUNTIME_IMAGE_LOCAL}|" "$YAML_NAME"
+
+  cat <<EOF >> "$YAML_NAME"
+      volumes:
+      - name: model
+        emptyDir: {}
+      - name: dri
+        hostPath:
+          path: /dev/dri
+          type: DirectoryOrCreate
+      tolerations:
+      - key: "gpu"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+EOF
+
+  echo " Deploying model to Kubernetes..."
+  if kubectl apply -f "$YAML_NAME"; then
+    echo " Model '${MODEL_NAME}' is now running in your Kind cluster!"
+  else
+    echo " Failed to apply manifest. Inspect ${YAML_NAME} for issues."
+    return 1
+  fi
+
+  echo " Creating Service to expose model..."
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${CONTAINER_NAME}-svc
+spec:
+  selector:
+    app: ${CONTAINER_NAME}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+EOF
+
+  echo ""
+  echo " You can now test the model via:"
+  echo "    kubectl port-forward svc/${CONTAINER_NAME}-svc 8080:8080"
+  echo ""
+  echo " Then:"
+  echo "    curl -X POST http://localhost:8080/completion \\"
+  echo "      -H 'Content-Type: application/json' \\"
+  echo "      -d '{\"prompt\": \"What is the capital of France?\", \"n_predict\": 32}'"
+  echo ""
+}
+
+function teardown_ramalama_model() {
+  MODEL_NAME="$1"
+  IMAGE_TAG="$(basename "$MODEL_NAME" | tr '[:upper:]' '[:lower:]' | tr ':' '-' | tr '/' '-')"
+  CONTAINER_NAME="$(echo "${IMAGE_TAG}" | tr '.' '-' | tr '[:upper:]' '[:lower:]')"
+
+  echo " Tearing down deployed model '${MODEL_NAME}'..."
+
+  if kubectl get deployment "${CONTAINER_NAME}" &>/dev/null; then
+    kubectl delete deployment "${CONTAINER_NAME}"
+  fi
+
+  if kubectl get service "${CONTAINER_NAME}-svc" &>/dev/null; then
+    kubectl delete service "${CONTAINER_NAME}-svc"
+  fi
+
+  if [ -f "${CONTAINER_NAME}.yaml" ]; then
+    rm -f "${CONTAINER_NAME}.yaml"
+  fi
+
+  echo " Model '${MODEL_NAME}' has been removed from the cluster."
+}
+
 function delete_cluster() {
   echo " Deleting kind cluster..."
   kind delete cluster --name "${CLUSTER_NAME}"
@@ -277,17 +407,40 @@ function usage() {
 
 case "$1" in
   create)
-    gpu_type=${2:-rocm}
-    start_local_registry
-    create_kind_cluster "$gpu_type"
-    apply_local_registry_configmap
-    build_and_push_images "$gpu_type"
-    deploy_device_plugin "$gpu_type"
-    echo " Simulated GPU Kind cluster is ready for '${gpu_type}'!"
-    ;;
+  gpu_type=${2:-rocm}
+  ramalama_model=""
+  for arg in "$@"; do
+    case "$arg" in
+      --ramalama-model=*)
+        ramalama_model="${arg#*=}"
+        ;;
+    esac
+  done
+
+  start_local_registry
+  create_kind_cluster "$gpu_type"
+  apply_local_registry_configmap
+  build_and_push_images "$gpu_type"
+  deploy_device_plugin "$gpu_type"
+
+  if [[ -n "$ramalama_model" ]]; then
+    echo "Deploying model with RamaLama: $ramalama_model"
+    ramalama_deploy_model "$ramalama_model"
+  fi
+
+  echo " Simulated GPU Kind cluster is ready for '${gpu_type}'!"
+  ;;
   delete)
     delete_cluster
     delete_registry
+    ;;
+  ramalama-redeploy-model)
+    if [ -z "$2" ]; then
+      echo " Please provide a model name to redeploy."
+      exit 1
+    fi
+    teardown_ramalama_model "$2"
+    ramalama_deploy_model "$2"
     ;;
   *)
     usage

@@ -24,3 +24,10 @@ Thumbs.db
 registry/
 
 kind-gpu-config.yaml
+
+# Ignore RamaLama-generated YAMLs by pattern
+tinyllama*.yaml
+*.gguf.yaml
+
+# Ignore logs and convert artifacts
+convert.log
