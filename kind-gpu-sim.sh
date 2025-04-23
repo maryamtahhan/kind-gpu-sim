@@ -1,48 +1,123 @@
 
 #!/bin/bash
-
 set -e
 
-CLUSTER_NAME=kind-gpu-sim
-CONFIG_FILE=kind-gpu-config.yaml
-REGISTRY_NAME=kind-registry
 REGISTRY_PORT=5000
 ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
 
+for arg in "$@"; do
+  case "$arg" in
+    --registry-port=*)
+      REGISTRY_PORT="${arg#*=}"
+      ;;
+  esac
+done
+
+CLUSTER_NAME=kind-gpu-sim
+CONFIG_FILE=kind-gpu-config.yaml
+REGISTRY_NAME="kind-registry"
+
+# Function to start the local Docker registry
 function start_local_registry() {
-  echo " Starting local Docker registry from Amazon ECR Public..."
+  echo "Starting local Docker registry on port ${REGISTRY_PORT}..."
+
+  # Check if the registry container is running, and start it if not
   running=$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
   if [ "$running" != "true" ]; then
-    docker run -d --restart=always -p "${REGISTRY_PORT}:5000"       --name "${REGISTRY_NAME}" "${ECR_REGISTRY_IMAGE}"
+    docker run -d --restart=always -p "${REGISTRY_PORT}:5000" \
+      --name "${REGISTRY_NAME}" "${ECR_REGISTRY_IMAGE}"
+  else
+    echo "Registry '${REGISTRY_NAME}' already running."
   fi
+
+  echo "Ensuring the registry is connected to the Kind network..."
+  docker network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
 }
 
+
+function generate_kind_config() {
+  if [ -f "${CONFIG_FILE}" ]; then
+    echo "Config file ${CONFIG_FILE} already exists. Deleting it..."
+    rm -f "${CONFIG_FILE}"
+  fi
+
+  echo "Generating Kind cluster config with registry mirror localhost:${REGISTRY_PORT}..."
+  cat > "${CONFIG_FILE}" <<EOF
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  - |
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${REGISTRY_PORT}"]
+      endpoint = ["http://${REGISTRY_NAME}:5000"]
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+EOF
+}
+
+
+# Create the kind cluster with the generated config
 function create_kind_cluster() {
   gpu_type="$1"
-  echo " Creating kind cluster with 1 control-plane + 2 workers..."
+  generate_kind_config
+  echo "Creating kind cluster with 1 control-plane + 2 workers..."
   kind create cluster --name "${CLUSTER_NAME}" --config "${CONFIG_FILE}"
 
-  echo " Connecting registry to kind network..."
+  echo "Connecting registry to kind network..."
   docker network connect "kind" "${REGISTRY_NAME}" || true
 
-  echo " Detecting worker nodes dynamically..."
+  echo "Detecting worker nodes dynamically..."
   worker_nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -v control-plane)
 
-  echo " Patching worker nodes with fake '${gpu_type}' GPUs..."
+  echo "Patching worker nodes with fake '${gpu_type}' GPUs..."
   for node in $worker_nodes; do
-    echo "  Working on $node"
+    echo "Working on $node"
     kubectl label node "${node}" hardware-type=gpu --overwrite
     kubectl label node "${node}" node-role.kubernetes.io/worker="" --overwrite
     kubectl taint node "${node}" gpu=true:NoSchedule --overwrite
 
     if [ "$gpu_type" = "rocm" ]; then
       kubectl label node "${node}" rocm.amd.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json         -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]'         --subresource=status
+      kubectl patch node "${node}" --type=json \
+        -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]' \
+        --subresource=status
     elif [ "$gpu_type" = "nvidia" ]; then
       kubectl label node "${node}" nvidia.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json         -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]'         --subresource=status
+      kubectl patch node "${node}" --type=json \
+        -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]' \
+        --subresource=status
     fi
   done
+
+  echo "Configuring containerd on nodes to recognize local registry mirror..."
+
+  for node in $(kind get nodes --name "${CLUSTER_NAME}"); do
+    docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
+    cat <<EOF | docker exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" > /dev/null
+[host."http://${REGISTRY_NAME}:5000"]
+  capabilities = ["pull", "resolve"]
+EOF
+
+    echo "Reloading containerd on $node..."
+    docker exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
+  done
+}
+
+
+function apply_local_registry_configmap() {
+  echo "Applying local registry ConfigMap for Kubernetes..."
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-registry-hosting
+  namespace: kube-public
+data:
+  localRegistryHosting.v1: |
+    host: "localhost:${REGISTRY_PORT}"
+    help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+EOF
 }
 
 function build_and_push_images() {
@@ -187,6 +262,20 @@ function delete_cluster() {
   kind delete cluster --name "${CLUSTER_NAME}"
 }
 
+function delete_registry() {
+  echo "Deleting local Docker registry '${REGISTRY_NAME}'..."
+
+  if docker ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+    echo "  Stopping registry container..."
+    docker stop "${REGISTRY_NAME}" >/dev/null
+  fi
+
+  if docker ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+    echo "  Removing registry container..."
+    docker rm "${REGISTRY_NAME}" >/dev/null
+  fi
+}
+
 function usage() {
   echo "Usage: $0 {create [rocm|nvidia]|delete}"
   exit 1
@@ -197,12 +286,14 @@ case "$1" in
     gpu_type=${2:-rocm}
     start_local_registry
     create_kind_cluster "$gpu_type"
+    apply_local_registry_configmap
     build_and_push_images "$gpu_type"
     deploy_device_plugin "$gpu_type"
     echo " Simulated GPU Kind cluster is ready for '${gpu_type}'!"
     ;;
   delete)
     delete_cluster
+    delete_registry
     ;;
   *)
     usage
