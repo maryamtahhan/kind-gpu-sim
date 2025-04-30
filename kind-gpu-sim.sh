@@ -1,9 +1,7 @@
-
 #!/bin/bash
 set -e
 
 REGISTRY_PORT=5000
-ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
 
 for arg in "$@"; do
   case "$arg" in
@@ -13,33 +11,47 @@ for arg in "$@"; do
   esac
 done
 
+# --- Runtime detection ---
+if command -v podman &>/dev/null; then
+  echo "Using Podman as container runtime"
+  CONTAINER_RUNTIME="podman"
+  export KIND_EXPERIMENTAL_PROVIDER=podman
+  export DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock
+  systemctl --user enable --now podman.socket || true
+elif command -v docker &>/dev/null; then
+  echo "Using Docker as container runtime"
+  CONTAINER_RUNTIME="docker"
+else
+  echo "ERROR: Neither Docker nor Podman is installed." >&2
+  exit 1
+fi
+
+cr() {
+  "$CONTAINER_RUNTIME" "$@"
+}
+
+ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
 CLUSTER_NAME=kind-gpu-sim
 CONFIG_FILE=kind-gpu-config.yaml
 REGISTRY_NAME="kind-registry"
 
-function start_local_registry() {
-  echo "Starting local Docker registry on port ${REGISTRY_PORT}..."
-
-  running=$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
+start_local_registry() {
+  echo "Starting local registry on port ${REGISTRY_PORT}..."
+  running=$(cr inspect -f '{{.State.Running}}' "$REGISTRY_NAME" 2>/dev/null || echo "false")
   if [ "$running" != "true" ]; then
-    docker run -d --restart=always -p "${REGISTRY_PORT}:5000" \
-      --name "${REGISTRY_NAME}" "${ECR_REGISTRY_IMAGE}"
+    cr run -d --restart=always -p "${REGISTRY_PORT}:5000" \
+      --name "$REGISTRY_NAME" \
+      --network=kind \
+      "$ECR_REGISTRY_IMAGE"
   else
     echo "Registry '${REGISTRY_NAME}' already running."
+    cr network connect kind "$REGISTRY_NAME" 2>/dev/null || true
   fi
-
-  echo "Ensuring the registry is connected to the Kind network..."
-  docker network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
 }
 
-function generate_kind_config() {
-  if [ -f "${CONFIG_FILE}" ]; then
-    echo "Config file ${CONFIG_FILE} already exists. Deleting it..."
-    rm -f "${CONFIG_FILE}"
-  fi
-
-  echo "Generating Kind cluster config with registry mirror localhost:${REGISTRY_PORT}..."
-  cat > "${CONFIG_FILE}" <<EOF
+generate_kind_config() {
+  rm -f "$CONFIG_FILE"
+  cat > "$CONFIG_FILE" <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 containerdConfigPatches:
@@ -53,49 +65,23 @@ nodes:
 EOF
 }
 
-function create_kind_cluster() {
+create_kind_cluster() {
   gpu_type="$1"
   generate_kind_config
-  echo "Creating kind cluster with 1 control-plane + 2 workers..."
-  kind create cluster --name "${CLUSTER_NAME}" --config "${CONFIG_FILE}"
+  kind create cluster --name "$CLUSTER_NAME" --config "$CONFIG_FILE"
 
-  echo "Connecting registry to kind network..."
-  docker network connect "kind" "${REGISTRY_NAME}" || true
-
-  echo "Detecting worker nodes dynamically..."
-  worker_nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -v control-plane)
-
-  echo "Patching worker nodes with fake '${gpu_type}' GPUs..."
-  for node in $worker_nodes; do
-    echo "Working on $node"
-    kubectl label node "${node}" hardware-type=gpu --overwrite
-    kubectl label node "${node}" node-role.kubernetes.io/worker="" --overwrite
-    kubectl taint node "${node}" gpu=true:NoSchedule --overwrite
-
+  for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep -v control-plane); do
+    kubectl label node "$node" hardware-type=gpu --overwrite
+    kubectl taint node "$node" gpu=true:NoSchedule --overwrite
     if [ "$gpu_type" = "rocm" ]; then
-      kubectl label node "${node}" rocm.amd.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json \
-        -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]' \
-        --subresource=status
+      kubectl label node "$node" rocm.amd.com/gpu.present=true --overwrite
+      kubectl patch node "$node" --type=json \
+        -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]' --subresource=status
     elif [ "$gpu_type" = "nvidia" ]; then
-      kubectl label node "${node}" nvidia.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json \
-        -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]' \
-        --subresource=status
+      kubectl label node "$node" nvidia.com/gpu.present=true --overwrite
+      kubectl patch node "$node" --type=json \
+        -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]' --subresource=status
     fi
-  done
-
-  echo "Configuring containerd on nodes to recognize local registry mirror..."
-
-  for node in $(kind get nodes --name "${CLUSTER_NAME}"); do
-    docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
-    cat <<EOF | docker exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" > /dev/null
-[host."http://${REGISTRY_NAME}:5000"]
-  capabilities = ["pull", "resolve"]
-EOF
-
-    echo "Reloading containerd on $node..."
-    docker exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
   done
 }
 
@@ -122,12 +108,12 @@ function build_and_push_images() {
       git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
     fi
     cd k8s-device-plugin-nvidia
-    docker build \
+    cr build \
       --build-arg GOLANG_VERSION=1.21.6 \
       -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
       -f deployments/container/Dockerfile \
       .
-    docker push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+    cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
     cd ..
     return
   fi
@@ -141,8 +127,8 @@ function build_and_push_images() {
   sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
   sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
   sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
-  docker build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
-  docker push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+  cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
+  cr push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
   cd ..
 }
 
@@ -160,6 +146,17 @@ function deploy_device_plugin() {
 
 function deploy_rocm_plugin() {
   echo " Deploying AMD ROCm device plugin..."
+
+  IMAGE_URL="localhost:${REGISTRY_PORT}/amdgpu-dp:dev"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving image for Podman and loading into Kind..."
+    IMAGE_URL="localhost/amdgpu-dp:dev"
+    cr tag localhost:${REGISTRY_PORT}/amdgpu-dp:dev localhost/amdgpu-dp:dev
+    cr save localhost/amdgpu-dp:dev -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: DaemonSet
@@ -184,7 +181,8 @@ spec:
           effect: NoSchedule
       containers:
         - name: amdgpu-dp-ds
-          image: localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+          image: ${IMAGE_URL}
+          imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
 EOF
@@ -201,6 +199,17 @@ EOF
 
 function deploy_nvidia_plugin() {
   echo " Deploying NVIDIA GPU device plugin..."
+
+  IMAGE_URL="localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving NVIDIA plugin image for Podman and loading into Kind..."
+    IMAGE_URL="localhost/nvidia-device-plugin:dev"
+    cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev $IMAGE_URL || true
+    cr save $IMAGE_URL -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: DaemonSet
@@ -225,7 +234,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: nvidia-device-plugin-ctr
-          image: localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+          image: ${IMAGE_URL}
           securityContext:
             privileged: true
           env:
@@ -257,58 +266,90 @@ function ramalama_deploy_model() {
   CONTAINER_NAME="$(echo "${IMAGE_TAG}" | tr '.' '-' | tr '[:upper:]' '[:lower:]')"
   IMAGE_NAME="localhost:${REGISTRY_PORT}/${IMAGE_TAG}:dev"
 
-  echo " Removing stale image if it exists..."
-  docker rmi -f "$IMAGE_NAME" 2>/dev/null || true
+  echo "Removing stale image if it exists..."
+  cr rmi -f "$IMAGE_NAME" 2>/dev/null || true
 
-  echo " Converting Hugging Face model '${MODEL_NAME}' to OCI image..."
+  echo "Converting Hugging Face model '${MODEL_NAME}' to OCI image..."
   if ! ramalama convert "huggingface://${MODEL_NAME}" "oci://${IMAGE_NAME}" 2>&1 | tee convert.log | grep -q "unauthorized"; then
-    echo " Model converted successfully: ${IMAGE_NAME}"
+    echo "Model converted successfully: ${IMAGE_NAME}"
   else
-    echo " Conversion failed. Aborting."
+    echo "Conversion failed. Aborting."
     exit 1
   fi
 
-  echo " Retagging and pushing image to local registry..."
-  IMAGE_ID=$(docker images --format "{{.Repository}} {{.Tag}} {{.ID}}" | grep "<none>" | awk '{print $3}' | head -n1)
+  echo "Retagging and pushing image to local registry..."
+  IMAGE_ID=$(cr images --format "{{.Repository}} {{.Tag}} {{.ID}}" | grep "<none>" | awk '{print $3}' | head -n1)
   if [ -z "$IMAGE_ID" ]; then
-    echo " ERROR: No untagged image found to tag and push. Aborting."
-    docker images | grep tinyllama || true
+    echo "ERROR: No untagged image found to tag and push. Aborting."
+    cr images | grep tinyllama || true
     exit 1
   fi
 
-  docker tag "$IMAGE_ID" "$IMAGE_NAME"
-  docker push "$IMAGE_NAME"
+  cr tag "$IMAGE_ID" "$IMAGE_NAME"
 
-  echo " Pulling image back into Docker (for verification)..."
-  docker pull "$IMAGE_NAME"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving model image for Podman and loading into Kind..."
+    IMAGE_NAME="localhost/${IMAGE_TAG}:dev"
+    cr tag localhost:${REGISTRY_PORT}/${IMAGE_TAG}:dev "$IMAGE_NAME"
+    cr save "$IMAGE_NAME" -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  else
+    cr push "$IMAGE_NAME"
+    cr pull "$IMAGE_NAME"
+    kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"
+  fi
 
-  echo " Loading image into Kind cluster nodes..."
-  kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"
+  RAMALAMA_VERSION="0.8.1"
+  RAMALAMA_IMAGE="quay.io/ramalama/ramalama:${RAMALAMA_VERSION}"
+  RUNTIME_IMAGE_LOCAL="localhost:${REGISTRY_PORT}/ramalama:${RAMALAMA_VERSION}"
 
-  echo " Ensuring RamaLama runtime image is local..."
-  RUNTIME_IMAGE_REMOTE="quay.io/ramalama/ramalama:0.7"
-  RUNTIME_IMAGE_LOCAL="localhost:${REGISTRY_PORT}/ramalama:0.7"
+  cr pull "$RAMALAMA_IMAGE"
+  cr tag "$RAMALAMA_IMAGE" "$RUNTIME_IMAGE_LOCAL"
 
-  docker pull "$RUNTIME_IMAGE_REMOTE"
-  docker tag "$RUNTIME_IMAGE_REMOTE" "$RUNTIME_IMAGE_LOCAL"
-  docker push "$RUNTIME_IMAGE_LOCAL"
-  kind load docker-image "$RUNTIME_IMAGE_LOCAL" --name "$CLUSTER_NAME"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving RamaLama runtime image for Podman and loading into Kind..."
+    LOCAL_IMAGE="localhost/ramalama:${RAMALAMA_VERSION}"
+    cr tag "$RAMALAMA_IMAGE" "$LOCAL_IMAGE"
+    cr save "$LOCAL_IMAGE" -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  else
+    cr push "$RUNTIME_IMAGE_LOCAL"
+    kind load docker-image "$RUNTIME_IMAGE_LOCAL" --name "$CLUSTER_NAME"
+  fi
 
   echo " Generating Kubernetes manifest..."
   ramalama serve \
     --name "${CONTAINER_NAME}" \
     --generate=kube \
+    --runtime-args="llama.cpp" \
     "oci://${IMAGE_NAME}"
 
   YAML_NAME=$(ls *.yaml | grep "${CONTAINER_NAME}" | head -n1)
   echo " Fixing generated YAML: ${YAML_NAME}"
+
+  yq eval '
+(.spec.template.spec.containers[0].env) = [
+  {"name": "LLAMA_SSE4", "value": "\"1\""},
+  {"name": "LLAMA_AVX", "value": "\"0\""},
+  {"name": "LLAMA_AVX2", "value": "\"0\""},
+  {"name": "LLAMA_FMA", "value": "\"0\""},
+  {"name": "LLAMA_F16C", "value": "\"0\""}
+]
+' -i "$YAML_NAME"
 
   sed -i 's/apiVersion: v1/apiVersion: apps\/v1/' "$YAML_NAME"
   sed -i '/volumes:/,/type: DirectoryOrCreate/ d' "$YAML_NAME"
   sed -i 's/subPath: \/models/subPath: models/' "$YAML_NAME"
   sed -i "0,/name: .*/s/name: .*/name: ${CONTAINER_NAME}/" "$YAML_NAME"
   sed -i "0,/app: .*/s/app: .*/app: ${CONTAINER_NAME}/" "$YAML_NAME"
-  sed -i "s|quay.io/ramalama/ramalama:0.7|${RUNTIME_IMAGE_LOCAL}|" "$YAML_NAME"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    sed -i "s|image: .*ramalama.*|image: ramalama:${RAMALAMA_VERSION}|" "$YAML_NAME"
+  else
+    sed -i "s|image: .*ramalama.*|image: ${RUNTIME_IMAGE_LOCAL}|" "$YAML_NAME"
+  fi
+
 
   cat <<EOF >> "$YAML_NAME"
       volumes:
@@ -324,6 +365,12 @@ function ramalama_deploy_model() {
         value: "true"
         effect: "NoSchedule"
 EOF
+
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Removing /dev/kfd references for Podman..."
+    sed -i '/mountPath: \/dev\/kfd/,+1 d' "$YAML_NAME"
+    sed -i '/- name: kfd/,+2 d' "$YAML_NAME"
+  fi
 
   echo " Deploying model to Kubernetes..."
   if kubectl apply -f "$YAML_NAME"; then
@@ -348,16 +395,19 @@ spec:
       targetPort: 8080
 EOF
 
-  echo ""
-  echo " You can now test the model via:"
-  echo "    kubectl port-forward svc/${CONTAINER_NAME}-svc 8080:8080"
-  echo ""
-  echo " Then:"
-  echo "    curl -X POST http://localhost:8080/completion \\"
-  echo "      -H 'Content-Type: application/json' \\"
-  echo "      -d '{\"prompt\": \"What is the capital of France?\", \"n_predict\": 32}'"
-  echo ""
+cat <<EOF
+
+You can now test the model via:
+    kubectl port-forward svc/${CONTAINER_NAME}-svc 8080:8080
+
+Then:
+    curl -X POST http://localhost:8080/completion \
+      -H 'Content-Type: application/json' \
+      -d '{"prompt": "What is the capital of France?", "n_predict": 32}'
+
+EOF
 }
+
 
 function teardown_ramalama_model() {
   MODEL_NAME="$1"
@@ -432,7 +482,9 @@ case "$1" in
   ;;
   delete)
     delete_cluster
-    delete_registry
+    if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+      delete_registry
+    fi
     ;;
   ramalama-redeploy-model)
     if [ -z "$2" ]; then

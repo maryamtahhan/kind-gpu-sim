@@ -26,14 +26,17 @@ the GPU simulator script:
 
 <!-- markdownlint-disable  MD013 -->
 <!-- Teporarily disable MD013 - Line length to keep the table formatting  -->
-| Tool         | Purpose                                                              |
-|--------------|----------------------------------------------------------------------|
-| **docker**   | Required by `kind`, runs the local registry and all cluster nodes    |
-| **kind**     | Creates the local Kubernetes cluster inside Docker                   |
-| **kubectl**  | CLI to interact with the Kubernetes cluster                          |
-| **git**      | Clones the GPU device plugin repositories (NVIDIA / ROCm)            |
-| **sed**      | Used to patch Dockerfiles for public registry compatibility          |
+| Tool         | Purpose                                                               |
+|--------------|-----------------------------------------------------------------------|
+| **docker**   | Required by `kind`, runs the local registry and all cluster nodes     |
+| **kind**     | Creates the local Kubernetes cluster inside Docker                    |
+| **kubectl**  | CLI to interact with the Kubernetes cluster                           |
+| **git**      | Clones the GPU device plugin repositories (NVIDIA / ROCm)             |
+| **sed**      | Used to patch Dockerfiles for public registry compatibility           |
+| **yq**       | Safely edits YAML files after RamaLama generates Kubernetes manifests |
 <!-- markdownlint-enable  MD013 -->
+
+TODO: https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -
 
 ## Features
 
