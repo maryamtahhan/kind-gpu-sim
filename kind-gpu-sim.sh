@@ -13,23 +13,42 @@ for arg in "$@"; do
   esac
 done
 
+# --- Runtime detection ---
+if command -v podman &>/dev/null; then
+  echo "Using Podman as container runtime"
+  CONTAINER_RUNTIME="podman"
+  export KIND_EXPERIMENTAL_PROVIDER=podman
+  export DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock
+  systemctl --user enable --now podman.socket || true
+elif command -v docker &>/dev/null; then
+  echo "Using Docker as container runtime"
+  CONTAINER_RUNTIME="docker"
+else
+  echo "ERROR: Neither Docker nor Podman is installed." >&2
+  exit 1
+fi
+
+cr() {
+  "$CONTAINER_RUNTIME" "$@"
+}
+
 CLUSTER_NAME=kind-gpu-sim
 CONFIG_FILE=kind-gpu-config.yaml
 REGISTRY_NAME="kind-registry"
 
 function start_local_registry() {
-  echo "Starting local Docker registry on port ${REGISTRY_PORT}..."
+  echo "Starting local registry on port ${REGISTRY_PORT}..."
 
-  running=$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
+  running=$(cr inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
   if [ "$running" != "true" ]; then
-    docker run -d --restart=always -p "${REGISTRY_PORT}:5000" \
+    cr run -d --restart=always -p "${REGISTRY_PORT}:5000" \
       --name "${REGISTRY_NAME}" "${ECR_REGISTRY_IMAGE}"
   else
     echo "Registry '${REGISTRY_NAME}' already running."
   fi
 
   echo "Ensuring the registry is connected to the Kind network..."
-  docker network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
+  cr network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
 }
 
 function generate_kind_config() {
@@ -60,7 +79,7 @@ function create_kind_cluster() {
   kind create cluster --name "${CLUSTER_NAME}" --config "${CONFIG_FILE}"
 
   echo "Connecting registry to kind network..."
-  docker network connect "kind" "${REGISTRY_NAME}" || true
+  cr network connect "kind" "${REGISTRY_NAME}" || true
 
   echo "Detecting worker nodes dynamically..."
   worker_nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -v control-plane)
@@ -88,14 +107,14 @@ function create_kind_cluster() {
   echo "Configuring containerd on nodes to recognize local registry mirror..."
 
   for node in $(kind get nodes --name "${CLUSTER_NAME}"); do
-    docker exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
-    cat <<EOF | docker exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" > /dev/null
+    cr exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
+    cat <<EOF | cr exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" > /dev/null
 [host."http://${REGISTRY_NAME}:5000"]
   capabilities = ["pull", "resolve"]
 EOF
 
     echo "Reloading containerd on $node..."
-    docker exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
+    cr exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
   done
 }
 
@@ -122,12 +141,12 @@ function build_and_push_images() {
       git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
     fi
     cd k8s-device-plugin-nvidia
-    docker build \
+    cr build \
       --build-arg GOLANG_VERSION=1.21.6 \
       -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
       -f deployments/container/Dockerfile \
       .
-    docker push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+    cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
     cd ..
     return
   fi
@@ -141,8 +160,8 @@ function build_and_push_images() {
   sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
   sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
   sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
-  docker build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
-  docker push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+  cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
+  cr push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
   cd ..
 }
 
@@ -160,6 +179,17 @@ function deploy_device_plugin() {
 
 function deploy_rocm_plugin() {
   echo " Deploying AMD ROCm device plugin..."
+
+  IMAGE_URL="localhost:${REGISTRY_PORT}/amdgpu-dp:dev"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving image for Podman and loading into Kind..."
+    IMAGE_URL="localhost/amdgpu-dp:dev"
+    cr tag localhost:${REGISTRY_PORT}/amdgpu-dp:dev localhost/amdgpu-dp:dev
+    cr save localhost/amdgpu-dp:dev -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: DaemonSet
@@ -184,7 +214,8 @@ spec:
           effect: NoSchedule
       containers:
         - name: amdgpu-dp-ds
-          image: localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+          image: ${IMAGE_URL}
+          imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
 EOF
@@ -201,6 +232,17 @@ EOF
 
 function deploy_nvidia_plugin() {
   echo " Deploying NVIDIA GPU device plugin..."
+
+  IMAGE_URL="localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev"
+  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    echo "Saving NVIDIA plugin image for Podman and loading into Kind..."
+    IMAGE_URL="localhost/nvidia-device-plugin:dev"
+    cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev $IMAGE_URL || true
+    cr save $IMAGE_URL -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: DaemonSet
@@ -225,7 +267,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: nvidia-device-plugin-ctr
-          image: localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+          image: ${IMAGE_URL}
           securityContext:
             privileged: true
           env:
@@ -257,16 +299,16 @@ function delete_cluster() {
 }
 
 function delete_registry() {
-  echo "Deleting local Docker registry '${REGISTRY_NAME}'..."
+  echo "Deleting local registry '${REGISTRY_NAME}'..."
 
-  if docker ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+  if cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
     echo "  Stopping registry container..."
-    docker stop "${REGISTRY_NAME}" >/dev/null
+    cr stop "${REGISTRY_NAME}" >/dev/null
   fi
 
-  if docker ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+  if cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
     echo "  Removing registry container..."
-    docker rm "${REGISTRY_NAME}" >/dev/null
+    cr rm "${REGISTRY_NAME}" >/dev/null
   fi
 }
 
