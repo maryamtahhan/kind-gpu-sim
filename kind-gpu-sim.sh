@@ -260,127 +260,131 @@ EOF
   fi
 }
 
+function download_gguf_model() {
+  MODEL_NAME="$1"
+  IMAGE_TAG="$(basename "$MODEL_NAME" | tr '[:upper:]' '[:lower:]' | tr ':' '-' | tr '/' '-')"
+  EXTRACT_DIR="/tmp/gguf-models/${IMAGE_TAG}"
+  LOCAL_FILE="${EXTRACT_DIR}/model.file"
+
+  # Use Hugging Face API to list files
+  echo " Resolving GGUF filename via Hugging Face API..."
+  FILE_NAME=$(curl -sSfL \
+    -H "Authorization: Bearer ${HF_TOKEN}" \
+    "https://huggingface.co/api/models/${MODEL_NAME}" |
+    jq -r '.siblings[].rfilename' |
+    grep -iE '\.gguf$' |
+    head -n1)
+
+  # Check if a valid .gguf file was found
+  if [[ -z "$FILE_NAME" ]]; then
+    echo " ERROR: Could not find any .gguf file in Hugging Face repo for ${MODEL_NAME}. Please check the available files:"
+    curl -sSfL -H "Authorization: Bearer ${HF_TOKEN}" "https://huggingface.co/api/models/${MODEL_NAME}" | jq -r '.siblings[].rfilename'
+    exit 1
+  fi
+
+  GGUF_URL="https://huggingface.co/${MODEL_NAME}/resolve/main/${FILE_NAME}"
+  mkdir -p "$EXTRACT_DIR"
+
+  # Skip download if already cached
+  if [[ -f "$LOCAL_FILE" && $(stat -c%s "$LOCAL_FILE") -gt $((10 * 1024 * 1024)) ]]; then
+    echo "✔ GGUF model already exists: $LOCAL_FILE"
+    return
+  fi
+
+  echo "⬇ Downloading GGUF model file from: $GGUF_URL"
+  curl -L -f \
+    -H "Authorization: Bearer ${HF_TOKEN}" \
+    -o "$LOCAL_FILE" \
+    "$GGUF_URL" || {
+    echo " ERROR: Failed to download GGUF file from $GGUF_URL"
+    rm -f "$LOCAL_FILE"
+    exit 1
+  }
+
+  if file "$LOCAL_FILE" | grep -q 'HTML'; then
+    echo " ERROR: Downloaded file appears to be HTML (likely an error page)"
+    rm -f "$LOCAL_FILE"
+    exit 1
+  fi
+
+  echo "✔ Model downloaded to: $LOCAL_FILE"
+}
+
 function ramalama_deploy_model() {
   MODEL_NAME="$1"
   IMAGE_TAG="$(basename "$MODEL_NAME" | tr '[:upper:]' '[:lower:]' | tr ':' '-' | tr '/' '-')"
   CONTAINER_NAME="$(echo "${IMAGE_TAG}" | tr '.' '-' | tr '[:upper:]' '[:lower:]')"
   IMAGE_NAME="localhost:${REGISTRY_PORT}/${IMAGE_TAG}:dev"
+  GGUF_FILE_PATH="/tmp/gguf-models/${IMAGE_TAG}/model.file"
+  EXTRACT_DIR="/tmp/gguf-models/$(basename "$MODEL_NAME" | tr '[:upper:]' '[:lower:]' | tr ':' '-' | tr '/' '-')"
+  RAMALAMA_VERSION="0.8.1"
+  RUNTIME_IMAGE_LOCAL="localhost:${REGISTRY_PORT}/ramalama-runtime-${RAMALAMA_VERSION}:dev"
 
-  echo "Removing stale image if it exists..."
-  cr rmi -f "$IMAGE_NAME" 2>/dev/null || true
+  # Download the GGUF file
+  download_gguf_model "$MODEL_NAME"
 
-  echo "Converting Hugging Face model '${MODEL_NAME}' to OCI image..."
-  if ! ramalama convert "huggingface://${MODEL_NAME}" "oci://${IMAGE_NAME}" 2>&1 | tee convert.log | grep -q "unauthorized"; then
-    echo "Model converted successfully: ${IMAGE_NAME}"
-  else
-    echo "Conversion failed. Aborting."
-    exit 1
-  fi
+  # Generate OCI Image for Docker-based deployment
+  if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+    echo "Converting Hugging Face model to OCI image..."
+    ramalama convert "huggingface://${MODEL_NAME}" "oci://${IMAGE_NAME}"
+    cr push "$IMAGE_NAME"
+  elif [ "$CONTAINER_RUNTIME" = "podman" ]; then
+    # Convert model to OCI image for Podman (image will not be pushed)
+    echo "Converting Hugging Face model to OCI image for Podman..."
+    ramalama convert "huggingface://${MODEL_NAME}" "oci://${IMAGE_NAME}"
 
-  echo "Retagging and pushing image to local registry..."
-  IMAGE_ID=$(cr images --format "{{.Repository}} {{.Tag}} {{.ID}}" | grep "<none>" | awk '{print $3}' | head -n1)
-  if [ -z "$IMAGE_ID" ]; then
-    echo "ERROR: No untagged image found to tag and push. Aborting."
-    cr images | grep tinyllama || true
-    exit 1
-  fi
-
-  cr tag "$IMAGE_ID" "$IMAGE_NAME"
-
-  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    echo "Saving model image for Podman and loading into Kind..."
-    IMAGE_NAME="localhost/${IMAGE_TAG}:dev"
-    cr tag localhost:${REGISTRY_PORT}/${IMAGE_TAG}:dev "$IMAGE_NAME"
+    # Save and load image into Kind
     cr save "$IMAGE_NAME" -o /tmp/image.tar
     kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
     rm -f /tmp/image.tar
-  else
-    cr push "$IMAGE_NAME"
-    cr pull "$IMAGE_NAME"
-    kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"
   fi
 
-  RAMALAMA_VERSION="0.8.1"
-  RAMALAMA_IMAGE="quay.io/ramalama/ramalama:${RAMALAMA_VERSION}"
-  RUNTIME_IMAGE_LOCAL="localhost:${REGISTRY_PORT}/ramalama:${RAMALAMA_VERSION}"
-
-  cr pull "$RAMALAMA_IMAGE"
-  cr tag "$RAMALAMA_IMAGE" "$RUNTIME_IMAGE_LOCAL"
-
-  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    echo "Saving RamaLama runtime image for Podman and loading into Kind..."
-    LOCAL_IMAGE="localhost/ramalama:${RAMALAMA_VERSION}"
-    cr tag "$RAMALAMA_IMAGE" "$LOCAL_IMAGE"
-    cr save "$LOCAL_IMAGE" -o /tmp/image.tar
-    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
-    rm -f /tmp/image.tar
-  else
-    cr push "$RUNTIME_IMAGE_LOCAL"
-    kind load docker-image "$RUNTIME_IMAGE_LOCAL" --name "$CLUSTER_NAME"
-  fi
-
-  echo " Generating Kubernetes manifest..."
-  ramalama serve \
-    --name "${CONTAINER_NAME}" \
-    --generate=kube \
-    --runtime-args="llama.cpp" \
-    "oci://${IMAGE_NAME}"
+  # Generate Kubernetes manifest
+  echo "Generating Kubernetes manifest..."
+  ramalama serve --name "${CONTAINER_NAME}" --generate=kube "oci://${IMAGE_NAME}"
 
   YAML_NAME=$(ls *.yaml | grep "${CONTAINER_NAME}" | head -n1)
-  echo " Fixing generated YAML: ${YAML_NAME}"
+  echo "Fixing generated YAML: ${YAML_NAME}"
 
+  echo "Using runtime image: $RUNTIME_IMAGE_LOCAL"
+  yq eval ".spec.template.spec.containers[0].image = \"${RUNTIME_IMAGE_LOCAL}\"" -i "$YAML_NAME"
+
+  # Edit YAML to mount the downloaded model and set environment variables
   yq eval '
-(.spec.template.spec.containers[0].env) = [
-  {"name": "LLAMA_SSE4", "value": "\"1\""},
-  {"name": "LLAMA_AVX", "value": "\"0\""},
-  {"name": "LLAMA_AVX2", "value": "\"0\""},
-  {"name": "LLAMA_FMA", "value": "\"0\""},
-  {"name": "LLAMA_F16C", "value": "\"0\""}
-]
-' -i "$YAML_NAME"
+    .spec.template.spec.containers[0].env = [
+      {"name": "HIP_VISIBLE_DEVICES", "value": "0"},
+      {"name": "LLAMA_SSE4", "value": "0"},
+      {"name": "LLAMA_AVX", "value": "0"},
+      {"name": "LLAMA_AVX2", "value": "1"},
+      {"name": "LLAMA_FMA", "value": "0"},
+      {"name": "LLAMA_F16C", "value": "0"}
+    ] |
+    .spec.template.spec.tolerations = [
+      {"key": "gpu", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
+    ] |
+    .spec.template.spec.containers[0].volumeMounts = [
+      {"name": "model", "mountPath": "/mnt/models"},
+      {"name": "dri", "mountPath": "/dev/dri"}
+    ] |
+    .spec.template.spec.volumes = [
+      {"name": "model", "hostPath": {"path": "'$EXTRACT_DIR'", "type": "Directory"}},
+      {"name": "dri", "hostPath": {"path": "/dev/dri", "type": "DirectoryOrCreate"}}
+    ]
+  ' -i "$YAML_NAME"
 
   sed -i 's/apiVersion: v1/apiVersion: apps\/v1/' "$YAML_NAME"
-  sed -i '/volumes:/,/type: DirectoryOrCreate/ d' "$YAML_NAME"
-  sed -i 's/subPath: \/models/subPath: models/' "$YAML_NAME"
   sed -i "0,/name: .*/s/name: .*/name: ${CONTAINER_NAME}/" "$YAML_NAME"
   sed -i "0,/app: .*/s/app: .*/app: ${CONTAINER_NAME}/" "$YAML_NAME"
-  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    sed -i "s|image: .*ramalama.*|image: ramalama:${RAMALAMA_VERSION}|" "$YAML_NAME"
-  else
-    sed -i "s|image: .*ramalama.*|image: ${RUNTIME_IMAGE_LOCAL}|" "$YAML_NAME"
-  fi
 
-
-  cat <<EOF >> "$YAML_NAME"
-      volumes:
-      - name: model
-        emptyDir: {}
-      - name: dri
-        hostPath:
-          path: /dev/dri
-          type: DirectoryOrCreate
-      tolerations:
-      - key: "gpu"
-        operator: "Equal"
-        value: "true"
-        effect: "NoSchedule"
-EOF
-
-  if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    echo "Removing /dev/kfd references for Podman..."
-    sed -i '/mountPath: \/dev\/kfd/,+1 d' "$YAML_NAME"
-    sed -i '/- name: kfd/,+2 d' "$YAML_NAME"
-  fi
-
-  echo " Deploying model to Kubernetes..."
+  echo "Deploying model to Kubernetes..."
   if kubectl apply -f "$YAML_NAME"; then
-    echo " Model '${MODEL_NAME}' is now running in your Kind cluster!"
+    echo "Model '${MODEL_NAME}' is now running in your Kind cluster!"
   else
-    echo " Failed to apply manifest. Inspect ${YAML_NAME} for issues."
+    echo "Failed to apply manifest. Inspect ${YAML_NAME} for issues."
     return 1
   fi
 
-  echo " Creating Service to expose model..."
+  echo "Creating Service to expose model..."
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Service
@@ -407,7 +411,6 @@ Then:
 
 EOF
 }
-
 
 function teardown_ramalama_model() {
   MODEL_NAME="$1"
@@ -439,14 +442,14 @@ function delete_cluster() {
 function delete_registry() {
   echo "Deleting local Docker registry '${REGISTRY_NAME}'..."
 
-  if docker ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+  if cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
     echo "  Stopping registry container..."
-    docker stop "${REGISTRY_NAME}" >/dev/null
+    cr stop "${REGISTRY_NAME}" >/dev/null
   fi
 
-  if docker ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+  if cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
     echo "  Removing registry container..."
-    docker rm "${REGISTRY_NAME}" >/dev/null
+    cr rm "${REGISTRY_NAME}" >/dev/null
   fi
 }
 
@@ -482,9 +485,7 @@ case "$1" in
   ;;
   delete)
     delete_cluster
-    if [ "$CONTAINER_RUNTIME" = "docker" ]; then
-      delete_registry
-    fi
+    delete_registry
     ;;
   ramalama-redeploy-model)
     if [ -z "$2" ]; then
