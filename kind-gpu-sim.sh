@@ -1,4 +1,3 @@
-
 #!/bin/bash
 set -e
 
@@ -38,7 +37,6 @@ REGISTRY_NAME="kind-registry"
 
 function start_local_registry() {
   echo "Starting local registry on port ${REGISTRY_PORT}..."
-
   running=$(cr inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || echo "false")
   if [ "$running" != "true" ]; then
     cr run -d --restart=always -p "${REGISTRY_PORT}:5000" \
@@ -46,18 +44,12 @@ function start_local_registry() {
   else
     echo "Registry '${REGISTRY_NAME}' already running."
   fi
-
   echo "Ensuring the registry is connected to the Kind network..."
   cr network connect kind "${REGISTRY_NAME}" 2>/dev/null || true
 }
 
 function generate_kind_config() {
-  if [ -f "${CONFIG_FILE}" ]; then
-    echo "Config file ${CONFIG_FILE} already exists. Deleting it..."
-    rm -f "${CONFIG_FILE}"
-  fi
-
-  echo "Generating Kind cluster config with registry mirror localhost:${REGISTRY_PORT}..."
+  [ -f "${CONFIG_FILE}" ] && rm -f "${CONFIG_FILE}"
   cat > "${CONFIG_FILE}" <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -75,51 +67,34 @@ EOF
 function create_kind_cluster() {
   gpu_type="$1"
   generate_kind_config
-  echo "Creating kind cluster with 1 control-plane + 2 workers..."
   kind create cluster --name "${CLUSTER_NAME}" --config "${CONFIG_FILE}"
-
-  echo "Connecting registry to kind network..."
   cr network connect "kind" "${REGISTRY_NAME}" || true
 
-  echo "Detecting worker nodes dynamically..."
   worker_nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -v control-plane)
-
-  echo "Patching worker nodes with fake '${gpu_type}' GPUs..."
   for node in $worker_nodes; do
-    echo "Working on $node"
-    kubectl label node "${node}" hardware-type=gpu --overwrite
-    kubectl label node "${node}" node-role.kubernetes.io/worker="" --overwrite
-    kubectl taint node "${node}" gpu=true:NoSchedule --overwrite
-
+    kubectl label node "$node" hardware-type=gpu --overwrite
+    kubectl label node "$node" node-role.kubernetes.io/worker="" --overwrite
+    kubectl taint node "$node" gpu=true:NoSchedule --overwrite
     if [ "$gpu_type" = "rocm" ]; then
-      kubectl label node "${node}" rocm.amd.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json \
-        -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]' \
-        --subresource=status
+      kubectl label node "$node" rocm.amd.com/gpu.present=true --overwrite
+      kubectl patch node "$node" --type=json -p='[{"op": "add", "path": "/status/capacity/amd.com~1gpu", "value":"2"}]' --subresource=status
     elif [ "$gpu_type" = "nvidia" ]; then
-      kubectl label node "${node}" nvidia.com/gpu.present=true --overwrite
-      kubectl patch node "${node}" --type=json \
-        -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]' \
-        --subresource=status
+      kubectl label node "$node" nvidia.com/gpu.present=true --overwrite
+      kubectl patch node "$node" --type=json -p='[{"op": "add", "path": "/status/capacity/nvidia.com~1gpu", "value":"2"}]' --subresource=status
     fi
   done
 
-  echo "Configuring containerd on nodes to recognize local registry mirror..."
-
   for node in $(kind get nodes --name "${CLUSTER_NAME}"); do
     cr exec "$node" mkdir -p "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
-    cat <<EOF | cr exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" > /dev/null
+    cat <<EOF | cr exec -i "$node" tee "/etc/containerd/certs.d/localhost:${REGISTRY_PORT}/hosts.toml" >/dev/null
 [host."http://${REGISTRY_NAME}:5000"]
   capabilities = ["pull", "resolve"]
 EOF
-
-    echo "Reloading containerd on $node..."
     cr exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
   done
 }
 
 function apply_local_registry_configmap() {
-  echo "Applying local registry ConfigMap for Kubernetes..."
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -135,33 +110,55 @@ EOF
 
 function build_and_push_images() {
   gpu_type="$1"
+
   if [ "$gpu_type" = "nvidia" ]; then
     echo " Building NVIDIA device plugin locally..."
-    if [ ! -d k8s-device-plugin-nvidia ]; then
-      git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
-    fi
+    [ ! -d k8s-device-plugin-nvidia ] && git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
     cd k8s-device-plugin-nvidia
-    cr build \
-      --build-arg GOLANG_VERSION=1.21.6 \
+
+    if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+      echo "Patching NVIDIA Dockerfile for Podman compatibility..."
+      sed -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      sed -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      sed -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      grep FROM deployments/container/Dockerfile
+    fi
+
+    cr build --build-arg GOLANG_VERSION=1.21.6 \
       -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
-      -f deployments/container/Dockerfile \
-      .
-    cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+      -f deployments/container/Dockerfile .
+
+    if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+      cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+    else
+      cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev localhost/nvidia-device-plugin:dev
+      cr save localhost/nvidia-device-plugin:dev -o /tmp/image.tar
+      kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+      rm -f /tmp/image.tar
+    fi
     cd ..
     return
   fi
 
   echo " Building ROCm plugin images locally..."
-  if [ ! -d k8s-device-plugin-rocm ]; then
-    git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git k8s-device-plugin-rocm
-  fi
+  [ ! -d k8s-device-plugin-rocm ] && git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git k8s-device-plugin-rocm
   cd k8s-device-plugin-rocm
-  echo " Patching Dockerfile to use Amazon ECR Public mirrors..."
+
+  echo " Patching ROCm Dockerfile for public registry compatibility..."
   sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
   sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
   sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+
   cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
-  cr push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+
+  if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+    cr push localhost:${REGISTRY_PORT}/amdgpu-dp:dev
+  else
+    cr tag localhost:${REGISTRY_PORT}/amdgpu-dp:dev localhost/amdgpu-dp:dev
+    cr save localhost/amdgpu-dp:dev -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
+    rm -f /tmp/image.tar
+  fi
   cd ..
 }
 
@@ -178,16 +175,9 @@ function deploy_device_plugin() {
 }
 
 function deploy_rocm_plugin() {
-  echo " Deploying AMD ROCm device plugin..."
-
   IMAGE_URL="localhost:${REGISTRY_PORT}/amdgpu-dp:dev"
   if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    echo "Saving image for Podman and loading into Kind..."
     IMAGE_URL="localhost/amdgpu-dp:dev"
-    cr tag localhost:${REGISTRY_PORT}/amdgpu-dp:dev localhost/amdgpu-dp:dev
-    cr save localhost/amdgpu-dp:dev -o /tmp/image.tar
-    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
-    rm -f /tmp/image.tar
   fi
 
   cat <<EOF | kubectl apply -f -
@@ -220,27 +210,17 @@ spec:
             privileged: true
 EOF
 
-  echo " Giving the DaemonSet a few seconds to initialize..."
   sleep 5
-
-  echo " Waiting for ROCm device plugin pods to become Ready..."
-  if ! kubectl wait --for=condition=Ready -n kube-system pod -l app=amdgpu-device-plugin --timeout=60s; then
-    echo >&2 " ERROR: ROCm device plugin pods did not become Ready in time. Exiting."
+  kubectl wait --for=condition=Ready -n kube-system pod -l app=amdgpu-device-plugin --timeout=60s || {
+    echo >&2 "ERROR: ROCm plugin pods not ready in time"
     exit 1
-  fi
+  }
 }
 
 function deploy_nvidia_plugin() {
-  echo " Deploying NVIDIA GPU device plugin..."
-
   IMAGE_URL="localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev"
   if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-    echo "Saving NVIDIA plugin image for Podman and loading into Kind..."
     IMAGE_URL="localhost/nvidia-device-plugin:dev"
-    cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev $IMAGE_URL || true
-    cr save $IMAGE_URL -o /tmp/image.tar
-    kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
-    rm -f /tmp/image.tar
   fi
 
   cat <<EOF | kubectl apply -f -
@@ -283,33 +263,20 @@ spec:
             type: DirectoryOrCreate
 EOF
 
-  echo " Giving the DaemonSet a few seconds to initialize..."
   sleep 5
-
-  echo " Waiting for NVIDIA device plugin pods to become Ready..."
-  if ! kubectl wait --for=condition=Ready -n kube-system pod -l app=nvidia-device-plugin --timeout=60s; then
-    echo >&2 " ERROR: NVIDIA device plugin pods did not become Ready in time. Exiting."
+  kubectl wait --for=condition=Ready -n kube-system pod -l app=nvidia-device-plugin --timeout=60s || {
+    echo >&2 "ERROR: NVIDIA plugin pods not ready in time"
     exit 1
-  fi
+  }
 }
 
 function delete_cluster() {
-  echo " Deleting kind cluster..."
   kind delete cluster --name "${CLUSTER_NAME}"
 }
 
 function delete_registry() {
-  echo "Deleting local registry '${REGISTRY_NAME}'..."
-
-  if cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
-    echo "  Stopping registry container..."
-    cr stop "${REGISTRY_NAME}" >/dev/null
-  fi
-
-  if cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
-    echo "  Removing registry container..."
-    cr rm "${REGISTRY_NAME}" >/dev/null
-  fi
+  cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr stop "${REGISTRY_NAME}"
+  cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr rm "${REGISTRY_NAME}"
 }
 
 function usage() {
