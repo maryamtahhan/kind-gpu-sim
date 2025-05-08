@@ -59,6 +59,13 @@ containerdConfigPatches:
       endpoint = ["http://${REGISTRY_NAME}:5000"]
 nodes:
   - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "node-role.kubernetes.io/control-plane="
+            taints: ""
   - role: worker
   - role: worker
 EOF
