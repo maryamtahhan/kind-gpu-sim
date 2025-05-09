@@ -23,4 +23,5 @@ Thumbs.db
 # Local registry volumes or images
 registry/
 
-kind-gpu-config.yaml
+# Kind cluster configuration
+kind-config.yaml

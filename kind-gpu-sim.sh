@@ -3,11 +3,15 @@ set -e
 
 REGISTRY_PORT=5000
 ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
+CLUSTER_NAME=kind-gpu-sim
 
 for arg in "$@"; do
   case "$arg" in
     --registry-port=*)
       REGISTRY_PORT="${arg#*=}"
+      ;;
+    --cluster-name=*)
+      CLUSTER_NAME="${arg#*=}"
       ;;
   esac
 done
@@ -31,8 +35,7 @@ cr() {
   "$CONTAINER_RUNTIME" "$@"
 }
 
-CLUSTER_NAME=kind-gpu-sim
-CONFIG_FILE=kind-gpu-config.yaml
+CONFIG_FILE=kind-config.yaml
 REGISTRY_NAME="kind-registry"
 
 function start_local_registry() {
