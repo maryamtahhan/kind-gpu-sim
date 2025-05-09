@@ -6,6 +6,7 @@ on: # yamllint disable-line rule:truthy
       - kind-gpu-sim.sh
       - pods/rocm-gpu-test-pod.yaml
       - .github/workflows/rocm-ci.yaml
+  workflow_dispatch:
 
 jobs:
   gpu-sim-test:
