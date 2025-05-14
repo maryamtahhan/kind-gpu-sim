@@ -93,7 +93,7 @@ function create_kind_cluster() {
 [host."http://${REGISTRY_NAME}:5000"]
   capabilities = ["pull", "resolve"]
 EOF
-    cr exec "$node" kill -SIGHUP $(pidof containerd) || echo "Warning: could not reload containerd on $node"
+    cr exec "$node" kill -SIGHUP $(pidof containerd) 2>/dev/null || echo "Warning: could not reload containerd on $node"
   done
 }
 
