@@ -4,6 +4,7 @@ set -e
 REGISTRY_PORT=5000
 ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
 CLUSTER_NAME=kind-gpu-sim
+LOAD_IMAGE_NAME=not-set
 
 for arg in "$@"; do
   case "$arg" in
@@ -12,6 +13,9 @@ for arg in "$@"; do
       ;;
     --cluster-name=*)
       CLUSTER_NAME="${arg#*=}"
+      ;;
+    --image-name=*)
+      LOAD_IMAGE_NAME="${arg#*=}"
       ;;
   esac
 done
@@ -285,8 +289,13 @@ function delete_registry() {
 }
 
 function usage() {
-  echo "Usage: $0 {create [rocm|nvidia]|delete}"
+  echo "Usage: $0 {create [rocm|nvidia]|delete|load}"
   exit 1
+}
+
+function load_image() {
+  echo "Running: load docker-image ${LOAD_IMAGE_NAME} --name ${CLUSTER_NAME}"
+  kind load docker-image "${LOAD_IMAGE_NAME}" --name "${CLUSTER_NAME}"
 }
 
 case "$1" in
@@ -302,6 +311,9 @@ case "$1" in
   delete)
     delete_cluster
     delete_registry
+    ;;
+  load)
+    load_image
     ;;
   *)
     usage
