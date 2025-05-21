@@ -278,8 +278,10 @@ function delete_cluster() {
 }
 
 function delete_registry() {
-  cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr stop "${REGISTRY_NAME}"
-  cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr rm "${REGISTRY_NAME}"
+  echo "Stopping ${REGISTRY_NAME}"
+  cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr stop --ignore "${REGISTRY_NAME}"
+  echo "Removing ${REGISTRY_NAME}"
+  cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr rm --ignore "${REGISTRY_NAME}"
 }
 
 function usage() {
