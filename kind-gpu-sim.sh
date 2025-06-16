@@ -282,11 +282,21 @@ function delete_cluster() {
 }
 
 function delete_registry() {
-  echo "Stopping ${REGISTRY_NAME}"
-  cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr stop "${REGISTRY_NAME}"
-  echo "Removing ${REGISTRY_NAME}"
-  cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null && cr rm "${REGISTRY_NAME}"
+  echo "Stopping ${REGISTRY_NAME} (if running)..."
+  if cr ps -q -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+    cr stop "${REGISTRY_NAME}" || echo "Warning: Failed to stop ${REGISTRY_NAME}"
+  else
+    echo "No running container named '${REGISTRY_NAME}' to stop."
+  fi
+
+  echo "Removing ${REGISTRY_NAME} (if exists)..."
+  if cr ps -aq -f "name=^/${REGISTRY_NAME}$" &>/dev/null; then
+    cr rm "${REGISTRY_NAME}" || echo "Warning: Failed to remove ${REGISTRY_NAME}"
+  else
+    echo "No container named '${REGISTRY_NAME}' to remove."
+  fi
 }
+
 
 function usage() {
   echo "Usage: $0 {create [rocm|nvidia]|delete|load}"
