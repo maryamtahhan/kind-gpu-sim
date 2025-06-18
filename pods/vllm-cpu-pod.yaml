@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-cpu-pod
+spec:
+  containers:
+    - name: vllm-cpu-container
+      image: public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:v0.9.1
+      ports:
+        - containerPort: 8000
+      env:
+        - name: VLLM_CPU_KVCACHE_SPACE
+          value: "2"
+        - name: VLLM_CPU_OMP_THREADS_BIND
+          value: 0,1,2,3
+      args:
+        - --model=Qwen/Qwen1.5-0.5B
+        - --device=cpu
+        - --disable-custom-all-reduce
+        - --max-model-len=2048
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      securityContext:
+        privileged: true
+  nodeSelector:
+    hardware-type: gpu
+  tolerations:
+    - key: gpu
+      operator: Equal
+      value: true
+      effect: NoSchedule
+  volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 4Gi
+  restartPolicy: Never

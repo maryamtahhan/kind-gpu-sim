@@ -134,3 +134,11 @@ This project helps:
 - Devs test GPU workloads without expensive hardware
 - CI environments validate GPU scheduling logic
 - Anyone learn Kubernetes GPU primitives
+
+## Loading container images to the kind cluster
+
+```bash
+# ./kind-gpu-sim.sh load --image-name=<Image-Name> --cluster-name=<KIND_CLUSTER_NAME)>
+# for e.g.
+./kind-gpu-sim.sh load --image-name=public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:v0.9.1
+```

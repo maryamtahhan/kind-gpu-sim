@@ -304,8 +304,14 @@ function usage() {
 }
 
 function load_image() {
-  echo "Running: load docker-image ${LOAD_IMAGE_NAME} --name ${CLUSTER_NAME}"
-  kind load docker-image "${LOAD_IMAGE_NAME}" --name "${CLUSTER_NAME}"
+  if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+    echo "Running: load docker-image ${LOAD_IMAGE_NAME} --name ${CLUSTER_NAME}"
+    kind load docker-image "${LOAD_IMAGE_NAME}" --name "${CLUSTER_NAME}"
+  else
+    cr save ${LOAD_IMAGE_NAME} -o /tmp/image.tar
+    kind load image-archive /tmp/image.tar --name "${CLUSTER_NAME}"
+    rm -f /tmp/image.tar
+  fi
 }
 
 case "$1" in
