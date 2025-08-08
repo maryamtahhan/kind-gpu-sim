@@ -5,6 +5,19 @@ REGISTRY_PORT=5000
 ECR_REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2
 CLUSTER_NAME=kind-gpu-sim
 LOAD_IMAGE_NAME=not-set
+# Detect OS
+OS_TYPE=$(uname -s)
+if [[ "$OS_TYPE" == "Darwin" ]]; then
+  IS_MACOS=true
+else
+  IS_MACOS=false
+fi
+# Use pgrep on macOS instead of pidof
+if [ "$IS_MACOS" = true ]; then
+  PID_CMD="pgrep"
+else
+  PID_CMD="pidof"
+fi
 
 for arg in "$@"; do
   case "$arg" in
@@ -26,7 +39,11 @@ if command -v podman &>/dev/null; then
   CONTAINER_RUNTIME="podman"
   export KIND_EXPERIMENTAL_PROVIDER=podman
   export DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock
-  systemctl --user enable --now podman.socket || true
+  if [ "$IS_MACOS" = true ]; then
+    echo "Skipping systemctl command as it's not available on macOS"
+  else
+    systemctl --user enable --now podman.socket || true
+  fi
 elif command -v docker &>/dev/null; then
   echo "Using Docker as container runtime"
   CONTAINER_RUNTIME="docker"
@@ -97,7 +114,7 @@ function create_kind_cluster() {
 [host."http://${REGISTRY_NAME}:5000"]
   capabilities = ["pull", "resolve"]
 EOF
-    cr exec "$node" kill -SIGHUP $(pidof containerd) 2>/dev/null || echo "Warning: could not reload containerd on $node"
+    cr exec "$node" kill -SIGHUP $($PID_CMD containerd) 2>/dev/null || echo "Warning: could not reload containerd on $node"
   done
 }
 
@@ -125,9 +142,15 @@ function build_and_push_images() {
 
     if [ "$CONTAINER_RUNTIME" = "podman" ]; then
       echo "Patching NVIDIA Dockerfile for Podman compatibility..."
-      sed -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      sed -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      sed -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      if [ "$IS_MACOS" = true ]; then
+        sed -i '' 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i '' 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i '' 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      else
+        sed -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      fi
       grep FROM deployments/container/Dockerfile
     fi
 
@@ -152,9 +175,15 @@ function build_and_push_images() {
   cd k8s-device-plugin-rocm
 
   echo " Patching ROCm Dockerfile for public registry compatibility..."
-  sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
-  sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
-  sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  if [ "$IS_MACOS" = true ]; then
+    sed -i '' 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
+    sed -i '' 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+    sed -i '' 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  else
+    sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
+    sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+    sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  fi
 
   cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
 
