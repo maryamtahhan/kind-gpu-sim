@@ -15,10 +15,17 @@ fi
 
 if [ "$IS_MACOS" = true ]; then
   PID_CMD="pgrep"
-  SED=gsed
 else
   PID_CMD="pidof"
-  SED=sed
+fi
+
+# Detect the available `sed` tool
+if command -v gsed &>/dev/null; then
+  USE_GSED=true
+  SED=gsed  # Use `gsed` if available
+else
+  USE_GSED=false
+  SED=sed   # Fallback to default `sed`
 fi
 
 for arg in "$@"; do
@@ -134,6 +141,42 @@ data:
 EOF
 }
 
+# Patching Dockerfile based on the GPU type (rocm or nvidia)
+patch_dockerfile() {
+  gpu_type="$1"
+  echo "Patching Dockerfile for $gpu_type compatibility..."
+  # Additional GPU-specific changes
+  if [ "$gpu_type" = "nvidia" ]; then
+    # Apply NVIDIA-specific patching if needed
+    echo "Applying NVIDIA-specific patches to the Dockerfile..."
+      if [ "$IS_MACOS" = true ] && [ "$USE_GSED" = false ]; then
+        # macOS-specific patching with sed
+        ${SED} -i '' 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        ${SED} -i '' 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        ${SED} -i '' 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      else
+        # Linux-specific patching with default sed
+        ${SED} -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        ${SED} -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        ${SED} -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      fi
+  elif [ "$gpu_type" = "rocm" ]; then
+    # Apply ROCm-specific patching if needed
+    echo "Applying ROCm-specific patches to the Dockerfile..."
+    if [ "$IS_MACOS" = true ] && [ "$USE_GSED" = false ]; then
+      # macOS-specific patching with sed
+      ${SED} -i '' "s|^FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|" Dockerfile
+      ${SED} -i '' "s|^FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|" Dockerfile
+      ${SED} -i '' "s|^FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|" Dockerfile
+    else
+      # Linux-specific patching with default sed
+      ${SED} -i "s|^FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|" Dockerfile
+      ${SED} -i "s|^FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|" Dockerfile
+      ${SED} -i "s|^FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|" Dockerfile
+    fi
+  fi
+}
+
 function build_and_push_images() {
   gpu_type="$1"
 
@@ -143,11 +186,7 @@ function build_and_push_images() {
     cd k8s-device-plugin-nvidia
 
     if [ "$CONTAINER_RUNTIME" = "podman" ]; then
-      echo "Patching NVIDIA Dockerfile for Podman compatibility..."
-      ${SED} -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      ${SED} -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      ${SED} -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-
+      patch_dockerfile "$gpu_type"
       grep FROM deployments/container/Dockerfile
     fi
 
@@ -171,10 +210,7 @@ function build_and_push_images() {
   [ ! -d k8s-device-plugin-rocm ] && git clone https://github.com/RadeonOpenCompute/k8s-device-plugin.git k8s-device-plugin-rocm
   cd k8s-device-plugin-rocm
 
-  echo " Patching ROCm Dockerfile for public registry compatibility..."
-  ${SED} -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
-  ${SED} -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
-  ${SED} -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  patch_dockerfile "$gpu_type"
 
   cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
 
