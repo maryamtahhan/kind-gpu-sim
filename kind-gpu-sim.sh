@@ -19,13 +19,6 @@ else
   PID_CMD="pidof"
 fi
 
-# Allows building bundles in Mac replacing BSD 'sed' command by GNU-compatible 'gsed'
-if command -v which gsed 2>/dev/null; then
-SED=sed
-else
-SED=gsed
-fi
-
 for arg in "$@"; do
   case "$arg" in
     --registry-port=*)
@@ -149,9 +142,15 @@ function build_and_push_images() {
 
     if [ "$CONTAINER_RUNTIME" = "podman" ]; then
       echo "Patching NVIDIA Dockerfile for Podman compatibility..."
-      ${SED} -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      ${SED} -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
-      ${SED} -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      if [ "$IS_MACOS" = true ]; then
+        sed -i '' 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i '' 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i '' 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      else
+        sed -i 's|^FROM redhat/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+        sed -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
+      fi
       grep FROM deployments/container/Dockerfile
     fi
 
@@ -176,9 +175,15 @@ function build_and_push_images() {
   cd k8s-device-plugin-rocm
 
   echo " Patching ROCm Dockerfile for public registry compatibility..."
-  ${SED} -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
-  ${SED} -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
-  ${SED} -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  if [ "$IS_MACOS" = true ]; then
+    sed -i '' 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
+    sed -i '' 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+    sed -i '' 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  else
+    sed -i 's|FROM alpine:3.21.3|FROM public.ecr.aws/docker/library/alpine:3.21.3|' Dockerfile
+    sed -i 's|FROM docker.io/golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+    sed -i 's|FROM golang:1.23.6-alpine3.21|FROM public.ecr.aws/docker/library/golang:1.23.6-alpine3.21|' Dockerfile
+  fi
 
   cr build -t localhost:${REGISTRY_PORT}/amdgpu-dp:dev -f Dockerfile .
 
