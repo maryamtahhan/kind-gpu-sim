@@ -191,13 +191,12 @@ function build_and_push_images() {
       grep FROM deployments/container/Dockerfile
     fi
 
-    cr build --build-arg GOLANG_VERSION=1.21.6 \
-      -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
-      -f deployments/container/Dockerfile .
+    REGISTRY=localhost:${REGISTRY_PORT} GOLANG_VERSION=1.21.6 VERSION=dev make -f deployments/container/Makefile build # Always builds with docker
 
     if [ "$CONTAINER_RUNTIME" = "docker" ]; then
       cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
     else
+      docker save localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev | podman load
       cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev localhost/nvidia-device-plugin:dev
       cr save localhost/nvidia-device-plugin:dev -o /tmp/image.tar
       kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
