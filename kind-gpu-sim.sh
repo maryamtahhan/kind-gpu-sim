@@ -129,19 +129,21 @@ function build_and_push_images() {
       sed -i 's|^FROM public.ecr.aws/ubi9/ubi-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
       sed -i 's|^FROM registry.access.redhat.com/ubi9/ubi9-minimal|FROM registry.access.redhat.com/ubi9/ubi-minimal|' deployments/container/Dockerfile
       grep FROM deployments/container/Dockerfile
-    fi
-
-    REGISTRY=localhost:${REGISTRY_PORT} GOLANG_VERSION=1.21.6 VERSION=dev make -f deployments/container/Makefile build # Always builds with docker
-
-    if [ "$CONTAINER_RUNTIME" = "docker" ]; then
-      cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
-    else
-      docker save localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev | podman load
+      GOLANG_VERSION=1.21.6 BUILDAH_FORMAT=docker cr build \
+      -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
+      -f deployments/container/Dockerfile .
       cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev localhost/nvidia-device-plugin:dev
       cr save localhost/nvidia-device-plugin:dev -o /tmp/image.tar
       kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
       rm -f /tmp/image.tar
+    else
+      GOLANG_VERSION=1.21.6 cr build \
+        -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
+        -f deployments/container/Dockerfile .
+      cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
+
     fi
+
     cd ..
     return
   fi
