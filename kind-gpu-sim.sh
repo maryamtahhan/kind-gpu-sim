@@ -122,6 +122,7 @@ function build_and_push_images() {
     echo " Building NVIDIA device plugin locally..."
     [ ! -d k8s-device-plugin-nvidia ] && git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
     cd k8s-device-plugin-nvidia
+    git checkout v0.17.2
 
     if [ "$CONTAINER_RUNTIME" = "podman" ]; then
       echo "Patching NVIDIA Dockerfile for Podman compatibility..."
