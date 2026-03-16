@@ -184,12 +184,12 @@ function build_and_push_images() {
     echo " Building NVIDIA device plugin locally..."
     [ ! -d k8s-device-plugin-nvidia ] && git clone https://github.com/NVIDIA/k8s-device-plugin.git k8s-device-plugin-nvidia
     cd k8s-device-plugin-nvidia
-    git checkout v0.17.2
+    git checkout v0.18.2
 
     if [ "$CONTAINER_RUNTIME" = "podman" ]; then
       patch_dockerfile "$gpu_type"
       grep FROM deployments/container/Dockerfile
-      GOLANG_VERSION=1.21.6 BUILDAH_FORMAT=docker cr build \
+      BUILDAH_FORMAT=docker cr build \
       -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
       -f deployments/container/Dockerfile .
       cr tag localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev localhost/nvidia-device-plugin:dev
@@ -197,7 +197,7 @@ function build_and_push_images() {
       kind load image-archive /tmp/image.tar --name "$CLUSTER_NAME"
       rm -f /tmp/image.tar
     else
-      GOLANG_VERSION=1.21.6 cr build \
+      cr build \
         -t localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev \
         -f deployments/container/Dockerfile .
       cr push localhost:${REGISTRY_PORT}/nvidia-device-plugin:dev
